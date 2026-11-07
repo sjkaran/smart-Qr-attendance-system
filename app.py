@@ -117,7 +117,7 @@ def csrf_guard():
         if not hmac.compare_digest(sent, session["csrf"]): abort(400)
 
 @app.context_processor
-def inject_csrf(): return {"csrf_token": session.get("csrf", "")}
+def inject_csrf(): return {"csrf_token": session.get("csrf", ""), "faculty_signup": bool(INVITE)}
 
 @app.after_request
 def secure_headers(r):
