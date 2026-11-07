@@ -463,6 +463,8 @@ def check_payload(payload, received):
     if CHECK_IP and request.remote_addr != s["teacher_ip"]: return None, "Join the classroom network to mark attendance.", age
     return s, None, age
 
+def reason_of(err): return "not_enrolled" if "not enrolled" in err else "rejected"
+
 def subject_name(s): return q1("SELECT name FROM subjects WHERE id=?", s["subject_id"])["name"]
 
 @app.post("/api/scan")                     # cookie-only mode: used only when passkeys are off (local/LAN use)
@@ -472,10 +474,10 @@ def scan():
     if PASSKEY_REQUIRED: return jsonify(ok=False, msg="Passkey confirmation is required."), 403
     if limited(f"scan:{session['uid']}", 40, 10): return jsonify(ok=False, msg="Slow down."), 429
     s, err, age = check_payload((request.get_json(silent=True) or {}).get("payload"), received)
-    if err: return jsonify(ok=False, msg=err), 400
+    if err: return jsonify(ok=False, msg=err, reason=reason_of(err)), 400
     c = run("INSERT OR IGNORE INTO attendance VALUES(?,?,?)", s["id"], session["uid"], time.time())
     audit("scan_ok_nopasskey", session["name"], f"session={s['id']} age_slots={age}")
-    return jsonify(ok=True, msg=f"Attendance marked for {subject_name(s)}." if c.rowcount else f"Already marked for {subject_name(s)}.")
+    return jsonify(ok=True, msg=f"Attendance marked for {subject_name(s)}." if c.rowcount else f"Already marked for {subject_name(s)}.", already=not c.rowcount)
 
 @app.post("/api/scan/begin")               # step 1: QR is fresh + student enrolled -> issue a one-time passkey challenge
 @login_required("student")
@@ -486,7 +488,7 @@ def scan_begin():
     if not cred: return jsonify(ok=False, msg="Set up your passkey first.", setup=True), 403
     s, err, age = check_payload((request.get_json(silent=True) or {}).get("payload"), received)
     if err:
-        audit("scan_rejected", session["name"], f"{err} age_slots={age}"); return jsonify(ok=False, msg=err), 400
+        audit("scan_rejected", session["name"], f"{err} age_slots={age}"); return jsonify(ok=False, msg=err, reason=reason_of(err)), 400
     cid, ch = new_challenge(uid, "scan", payload=f"{s['id']}:{age}", ttl=30)
     opts = generate_authentication_options(rp_id=rp(), challenge=ch, user_verification=UserVerificationRequirement.REQUIRED,
         allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(cred["cred_id"]))])
@@ -510,7 +512,7 @@ def scan_finish():
     if not s or s["ended_at"]: return jsonify(ok=False, msg="This class session just closed."), 400
     c = run("INSERT OR IGNORE INTO attendance VALUES(?,?,?)", s["id"], uid, time.time())
     audit("scan_ok", session["name"], f"session={sid} age_slots={age} ip={request.remote_addr}")
-    return jsonify(ok=True, msg=f"Attendance marked for {subject_name(s)}." if c.rowcount else f"Already marked for {subject_name(s)}.")
+    return jsonify(ok=True, msg=f"Attendance marked for {subject_name(s)}." if c.rowcount else f"Already marked for {subject_name(s)}.", already=not c.rowcount)
 
 def init():
     ddl = SCHEMA.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY").replace("REAL", "DOUBLE PRECISION") if PG else SCHEMA

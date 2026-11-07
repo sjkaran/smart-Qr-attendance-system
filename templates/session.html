@@ -1,10 +1,13 @@
 {% extends "base.html" %}{% block body %}
 <div class="row"><h1>{{ s.subject }}</h1><form method="post" action="/teacher/session/{{ s.id }}/end"><button class="danger">End session</button></form></div>
 <p class="mut">Students scan this live code from the student app. It changes every {{ slot_ms/1000 }} s, so photos and screenshots stop working.</p>
+<button id="vb" class="ghost" style="margin-bottom:12px"></button>
 <div id="qr" aria-label="Live attendance QR code"></div>
 <div class="card" style="margin-top:16px"><h2><span id="cnt">0</span> of <span id="tot">0</span> present</h2><ul class="plain" id="list"></ul></div>
 <script src="{{ url_for('static', filename='qrcode.js') }}"></script>
+<script src="{{ url_for('static', filename='voice.js') }}"></script>
 <script>
+Voice.bind(vb,'Name calling');let seen=null;
 const SID={{ s.id }};let tokens={},offset=0,SLOT=500,last=-1;
 async function refill(){try{const t0=Date.now();const r=await (await fetch(`/api/session/${SID}/tokens`)).json();
   if(r.ended){location="/teacher";return}
@@ -15,6 +18,8 @@ function tick(){const slot=Math.floor((Date.now()+offset)/SLOT);
   requestAnimationFrame(tick)}
 async function poll(){let r;try{r=await (await fetch(`/api/session/${SID}/live`)).json()}catch(e){return}
   cnt.textContent=r.present.length;tot.textContent=r.total;
+  if(seen===null)seen=new Set(r.present.map(p=>p.roll_no));
+  else r.present.slice().reverse().forEach(p=>{if(!seen.has(p.roll_no)){seen.add(p.roll_no);Voice.say(spoken(p.name)+' is present.')}});
   list.innerHTML=r.present.map(p=>`<li>${p.roll_no} · ${p.name.replace(/</g,'&lt;')}</li>`).join('')||'<li class="mut">Waiting for the first scan…</li>'}
-refill().then(()=>{tick();setInterval(refill,8000);poll();setInterval(poll,2000)});
+refill().then(()=>{tick();setInterval(refill,8000);poll();setInterval(poll,1500)});
 </script>{% endblock %}

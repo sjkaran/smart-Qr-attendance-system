@@ -1,15 +1,21 @@
 {% extends "base.html" %}{% block body %}<h1>Scan class QR</h1>
+<button id="vb" class="ghost" style="margin-bottom:10px"></button>
 <video id="v" playsinline muted></video><canvas id="c" hidden></canvas>
 <p class="mut" id="st">Starting camera…</p>
 <div class="card" id="res" role="status" aria-live="polite">Point your camera at the faculty screen. Keep the whole QR inside the frame.</div>
 <a class="btn ghost" href="/student">Back to my attendance</a>
 <script src="{{ url_for('static', filename='jsQR.js') }}"></script>
 <script src="{{ url_for('static', filename='pk.js') }}"></script>
+<script src="{{ url_for('static', filename='voice.js') }}"></script>
 <script>
 const v=document.getElementById('v'),c=document.getElementById('c'),res=document.getElementById('res'),st=document.getElementById('st'),
       ctx=c.getContext('2d',{willReadFrequently:true});
 const PK={{ 'true' if pk else 'false' }};
-let busy=false,done=false,frames=0,bd=null;
+let busy=false,done=false,frames=0,bd=null,lastReason='';
+Voice.bind(vb,'Voice');
+function speakResult(j){lastReason=j.reason||'';
+  if(j.ok)Voice.say(j.already?'You are already marked as present.':'You are marked as present.');
+  else if(j.reason==='not_enrolled')Voice.say('You are not enrolled.')}
 try{if('BarcodeDetector' in window)bd=new BarcodeDetector({formats:['qr_code']})}catch(e){bd=null}
 async function start(){
   try{
@@ -27,17 +33,17 @@ async function submit(p){
     if(PK){
       const a=await api('/api/scan/begin',{payload:p});
       if(a.setup){location='/student/passkey';return}
-      if(!a.cid)show(false,a.msg||'Rejected.');
+      if(!a.cid){show(false,a.msg||'Rejected.');speakResult(a)}
       else{
         st.textContent='Confirm with your fingerprint, face or screen lock…';
         let c=null;try{c=await navigator.credentials.get({publicKey:requestOpts(a.options)})}catch(e){}
         if(!c)show(false,'Identity check cancelled. Scan again.');
-        else{const b=await api('/api/scan/finish',{cid:a.cid,credential:cred2json(c)});ok=b.ok;show(ok,b.msg);if(b.status===401)setTimeout(()=>location='/login',1500)}
+        else{const b=await api('/api/scan/finish',{cid:a.cid,credential:cred2json(c)});ok=b.ok;show(ok,b.msg);speakResult(b);if(b.status===401)setTimeout(()=>location='/login',1500)}
       }
-    }else{const j=await api('/api/scan',{payload:p});ok=j.ok;show(ok,j.msg);if(j.status===401)setTimeout(()=>location='/login',1500)}
+    }else{const j=await api('/api/scan',{payload:p});ok=j.ok;show(ok,j.msg);speakResult(j);if(j.status===401)setTimeout(()=>location='/login',1500)}
   }catch(e){show(false,'No connection to the server. Check your internet and keep scanning.')}
   if(ok){done=true;v.srcObject.getTracks().forEach(t=>t.stop());st.textContent='';navigator.vibrate&&navigator.vibrate(120)}
-  else setTimeout(()=>{busy=false},800);
+  else setTimeout(()=>{busy=false},lastReason==='not_enrolled'?6000:800);
 }
 async function decode(){
   if(bd){try{const r=await bd.detect(v);return r.length?r[0].rawValue:null}catch(e){bd=null}}
