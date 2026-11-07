@@ -1,5 +1,10 @@
 {% extends "base.html" %}{% block body %}<a href="/teacher" class="mut">&larr; Subjects</a><h1>{{ s.name }}: students</h1>
-<div class="card"><table style="width:100%"><tr><th align="left">Roll no</th><th align="left">Name</th><th align="left">Status</th><th></th></tr>
+<div class="card"><table id="st" style="width:100%"><tr><th align="left">Roll no</th><th align="left">Name</th><th align="left">Status</th><th align="left">Activation code</th><th></th></tr>
 {% for r in rows %}<tr><td>{{ r.roll_no }}</td><td>{{ r.name }}</td>
 <td>{% if not r.active %}<span class="A">Not activated</span>{% elif on and not r.n_keys %}<span class="A">No passkey</span>{% else %}<span class="P">Ready</span>{% endif %}</td>
-<td>{% if r.n_keys %}<form method="post" action="/teacher/student/{{ r.id }}/reset" onsubmit="return confirm('Remove this student\'s passkey?')"><button class="ghost">Reset passkey</button></form>{% endif %}</td></tr>{% endfor %}</table></div>{% endblock %}
+<td>{% if not r.active %}{% if r.code %}<code>{{ r.code }}</code>{% else %}<span class="mut">use New code</span>{% endif %}{% else %}<span class="mut">activated</span>{% endif %}</td>
+<td>{% if not r.active %}<form method="post" action="/teacher/student/{{ r.id }}/newcode"><button class="ghost">New code</button></form>
+{% elif r.n_keys %}<form method="post" action="/teacher/student/{{ r.id }}/reset" onsubmit="return confirm('Remove this student\'s passkey?')"><button class="ghost">Reset passkey</button></form>{% endif %}</td></tr>{% endfor %}</table>
+<p><button id="dl" class="ghost">Download pending codes (CSV)</button> <button class="ghost" onclick="print()">Print</button></p></div>
+<script>dl.onclick=()=>{const rows=[['roll','name','code']];document.querySelectorAll('#st tr').forEach(r=>{const c=r.querySelector('code');if(c)rows.push([r.cells[0].textContent,r.cells[1].textContent,c.textContent])});
+const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(x=>'"'+x.replace(/"/g,'""')+'"').join(',')).join('\n')],{type:'text/csv'}));a.download='pending_codes.csv';a.click()}</script>{% endblock %}

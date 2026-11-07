@@ -3,9 +3,9 @@
 <span class="mut">{{ s.n_students }} students · {{ s.n_sessions }} sessions</span></div>
 <form method="post" action="/teacher/subject/{{ s.id }}/start"><button>{{ 'Resume live QR' if s.live_id else 'Start attendance' }}</button></form></div>
 <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
-<p class="mut" style="margin:0 0 10px;font-size:.9rem">Roster columns: <b>roll_no</b> (required), <b>name</b> and <b>code</b> (optional). Leave <b>code</b> out for random activation codes, or set a different 6+ letter/digit code per student.</p>
+<p class="mut" style="margin:0 0 10px;font-size:.9rem">Roster file (.xlsx or .csv) columns: <b>name</b>, <b>roll</b>, <b>code</b>. Code is optional (6+ letters or digits, different for each student); leave it blank for random codes. Pending codes stay visible under <b>Students &amp; passkeys</b>.</p>
 <div class="row"><form class="inline row" method="post" enctype="multipart/form-data" action="/teacher/subject/{{ s.id }}/roster">
-<input type="file" name="file" accept=".xlsx" required><button class="ghost">Upload roster (.xlsx)</button></form>
+<input type="file" name="file" accept=".xlsx,.csv" required><button class="ghost">Upload roster</button></form>
 <a class="btn ghost" href="/teacher/subject/{{ s.id }}/students">Students &amp; passkeys</a> <a class="btn ghost" href="/teacher/subject/{{ s.id }}/export.xlsx">Download Excel report</a></div></div>
 {% else %}<p class="mut">No subjects yet. Add your first one below.</p>{% endfor %}
 <form method="post" action="/teacher/subject" class="card inline row"><input name="name" placeholder="New subject name" required><button>Add subject</button></form>{% endblock %}

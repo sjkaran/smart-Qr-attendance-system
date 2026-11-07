@@ -1,5 +1,5 @@
 """Dynamic-QR attendance: Flask + SQLite. Run: python app.py  (demo data seeded on first run)"""
-import hmac, hashlib, io, json, os, secrets, sqlite3, time
+import base64, hmac, hashlib, io, json, os, secrets, sqlite3, time
 from collections import defaultdict, deque
 from werkzeug.middleware.proxy_fix import ProxyFix
 from functools import wraps
@@ -7,6 +7,7 @@ import pandas as pd
 from flask import (Flask, g, redirect, render_template, request, send_file,
                    session, jsonify, url_for, flash, abort)
 from werkzeug.security import generate_password_hash, check_password_hash
+from cryptography.fernet import Fernet
 from webauthn import (generate_registration_options, verify_registration_response, generate_authentication_options,
                       verify_authentication_response, options_to_json)
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -159,6 +160,12 @@ def take_challenge(cid, uid, purpose):          # single use, bound to the user 
 def rp(): return os.environ.get("RP_ID") or os.environ.get("RENDER_EXTERNAL_HOSTNAME") or request.host.split(":")[0]
 def origin(): return os.environ.get("ORIGIN") or (f"https://{rp()}" if ON_RENDER else f"{request.scheme}://{request.host}")
 def new_code(): return "".join(secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ23456789") for _ in range(8))
+def _fernet(): return Fernet(base64.urlsafe_b64encode(hashlib.sha256(app.secret_key.encode()).digest()))
+def enc_code(code): return _fernet().encrypt(code.encode()).decode()     # pending codes are stored encrypted so faculty can view them
+def dec_code(tok):
+    try: return _fernet().decrypt(tok.encode()).decode() if tok else None
+    except Exception: return None
+
 def code_hash(roll, code): return hmac.new(app.secret_key.encode(), f"{roll.upper()}|{code.upper()}".encode(), hashlib.sha256).hexdigest()
 
 def import_roster(sid, df):
@@ -182,13 +189,13 @@ def import_roster(sid, df):
             else: out["notes"].append(f"{roll}: your custom code was not used (it needs 6+ letters or digits and must differ for every student), so a random one was created.")
         u = q1("SELECT * FROM users WHERE UPPER(roll_no)=UPPER(?) AND role='student'", roll)
         if not u or not u["pw"]:
-            code = given or new_code(); h = code_hash(roll, code)
+            code = given or (dec_code(u["act_enc"]) if u else None) or new_code(); h = code_hash(roll, code)
             if u:
                 nm = nm if nm != roll else u["name"]; uid = u["id"]
-                run("UPDATE users SET act_hash=?, name=? WHERE id=?", h, nm, uid)
+                run("UPDATE users SET act_hash=?, act_enc=?, name=? WHERE id=?", h, enc_code(code), nm, uid)
             else:
-                try: uid = run("INSERT INTO users(username,pw,name,role,roll_no,act_hash) VALUES(?,?,?,?,?,?)", roll.lower(), None, nm, "student", roll, h, ret=True).lastrowid
-                except DBERR: db().rollback(); uid = run("INSERT INTO users(username,pw,name,role,roll_no,act_hash) VALUES(?,?,?,?,?,?)", f"{roll.lower()}-{secrets.token_hex(2)}", None, nm, "student", roll, h, ret=True).lastrowid
+                try: uid = run("INSERT INTO users(username,pw,name,role,roll_no,act_hash,act_enc) VALUES(?,?,?,?,?,?,?)", roll.lower(), None, nm, "student", roll, h, enc_code(code), ret=True).lastrowid
+                except DBERR: db().rollback(); uid = run("INSERT INTO users(username,pw,name,role,roll_no,act_hash,act_enc) VALUES(?,?,?,?,?,?,?)", f"{roll.lower()}-{secrets.token_hex(2)}", None, nm, "student", roll, h, enc_code(code), ret=True).lastrowid
             out["codes"].append((roll, nm, code))
         else: uid = u["id"]
         run("INSERT OR IGNORE INTO enrollments VALUES(?,?)", sid, uid); out["enrolled"] += 1
@@ -205,7 +212,8 @@ def login():
     if request.method == "POST":
         if limited("login:" + str(request.remote_addr), 10, 60) or limited("loginu:" + request.form.get("username", "").strip().lower(), 8, 300):
             flash("Too many attempts. Wait a minute."); return render_template("login.html")
-        u = q1("SELECT * FROM users WHERE username=?", request.form["username"].strip())
+        ident = request.form.get("username", "").strip()
+        u = q1("SELECT * FROM users WHERE LOWER(username)=LOWER(?) OR (role='student' AND UPPER(roll_no)=UPPER(?)) LIMIT 1", ident, ident)
         if u and u["pw"] and check_password_hash(u["pw"], request.form["password"]):
             session.clear(); session.update(uid=u["id"], role=u["role"], name=u["name"]); session.permanent = True; audit("login", u["username"], request.remote_addr)
             return redirect(url_for("index"))
@@ -258,9 +266,11 @@ def own_subject(sid):
 @login_required("teacher")
 def upload_roster(sid):
     own_subject(sid)
-    try: r = import_roster(sid, pd.read_excel(request.files["file"], dtype=str))
+    try:
+        f = request.files["file"]
+        r = import_roster(sid, pd.read_csv(f, dtype=str) if f.filename.lower().endswith(".csv") else pd.read_excel(f, dtype=str))
     except Exception:
-        flash("Upload an .xlsx file with a 'roll_no' column (and optionally 'name')."); return redirect(url_for("teacher_home"))
+        flash("Upload an .xlsx or .csv file with a 'roll' column (plus 'name' and optional 'code')."); return redirect(url_for("teacher_home"))
     audit("roster_upload", session["name"], f"subject={sid} enrolled={r['enrolled']} new_accounts={len(r['codes'])}")
     return render_template("codes.html", r=r)
 
@@ -381,7 +391,7 @@ def activate():
         if not (u and u["act_hash"] and hmac.compare_digest(u["act_hash"], code_hash(roll, f.get("code", "").strip())) and len(f.get("password", "")) >= 8):
             audit("activation_failed", roll[:30], request.remote_addr)
             flash("Invalid roll number or code, or the password is shorter than 8 characters."); return render_template("activate.html")
-        run("UPDATE users SET pw=?, act_hash=NULL WHERE id=?", generate_password_hash(f["password"]), u["id"])
+        run("UPDATE users SET pw=?, act_hash=NULL, act_enc=NULL WHERE id=?", generate_password_hash(f["password"]), u["id"])
         session.clear(); session.update(uid=u["id"], role="student", name=u["name"]); session.permanent = True
         audit("activated", u["roll_no"]); return redirect(url_for("passkey_page" if PASSKEY_REQUIRED else "student_home"))
     return render_template("activate.html")
@@ -427,8 +437,10 @@ def pk_reg_verify():
 def students(sid):
     s = own_subject(sid)
     rows = q("""SELECT u.id, u.roll_no, u.name, (u.pw IS NOT NULL) AS active,
-      (SELECT COUNT(*) FROM credentials c WHERE c.user_id=u.id) AS n_keys FROM enrollments e
+      (SELECT COUNT(*) FROM credentials c WHERE c.user_id=u.id) AS n_keys, u.act_enc FROM enrollments e
       JOIN users u ON u.id=e.student_id WHERE e.subject_id=? ORDER BY u.roll_no""", sid)
+    rows = [dict(r, code=dec_code(r["act_enc"]) if not r["active"] else None) for r in rows]
+    if any(r["code"] for r in rows): audit("codes_viewed", session["name"], f"subject={sid}")
     return render_template("students.html", s=s, rows=rows, on=PASSKEY_REQUIRED)
 
 @app.post("/teacher/student/<int:uid>/reset")
@@ -439,6 +451,16 @@ def reset_passkey(uid):
     if not own: abort(404)
     run("DELETE FROM credentials WHERE user_id=?", uid); audit("passkey_reset", session["name"], f"student_id={uid}")
     flash("Passkey removed. The student can register a new one when signed in."); return redirect(url_for("students", sid=own["subject_id"]))
+
+@app.post("/teacher/student/<int:uid>/newcode")
+@login_required("teacher")
+def new_activation_code(uid):
+    own = q1("""SELECT e.subject_id, u.roll_no, u.pw FROM enrollments e JOIN subjects s ON s.id=e.subject_id JOIN users u ON u.id=e.student_id
+                WHERE e.student_id=? AND s.teacher_id=? LIMIT 1""", uid, session["uid"])
+    if not own or own["pw"]: abort(404)                     # only for students who have not activated yet
+    code = new_code(); run("UPDATE users SET act_hash=?, act_enc=? WHERE id=?", code_hash(own["roll_no"], code), enc_code(code), uid)
+    audit("code_reissued", session["name"], f"student_id={uid}"); flash(f"New activation code for {own['roll_no']}: {code}")
+    return redirect(url_for("students", sid=own["subject_id"]))
 
 @app.get("/teacher/audit.json")
 @login_required("teacher")
@@ -520,8 +542,9 @@ def init():
     for stmt in ddl.split(";"):
         if stmt.strip(): exe(c, stmt)
     c.commit()
-    try: exe(c, "ALTER TABLE users ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + "act_hash TEXT"); c.commit()   # upgrade older databases
-    except Exception: c.rollback()
+    for col in ("act_hash", "act_enc"):                                      # upgrade older databases
+        try: exe(c, "ALTER TABLE users ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + col + " TEXT"); c.commit()
+        except Exception: c.rollback()
     u, p = os.environ.get("FACULTY_USER"), os.environ.get("FACULTY_PASS")   # first faculty account (no shell on free hosts)
     if u and p:
         exe(c, "INSERT OR IGNORE INTO users(username,pw,name,role) VALUES(?,?,?,'teacher')",
