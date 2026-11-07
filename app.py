@@ -100,6 +100,10 @@ def login_required(role):
             if session.get("role") != role:
                 if request.path.startswith("/api/"): return jsonify(ok=False, msg="You are logged out. Log in again."), 401
                 return redirect(url_for("login"))
+            if role == "student" and not q1("SELECT 1 FROM users WHERE id=? AND pw IS NOT NULL", session.get("uid")):
+                session.clear()
+                if request.path.startswith("/api/"): return jsonify(ok=False, msg="Your account is not active. Log in again."), 401
+                return redirect(url_for("login"))
             return f(*a, **k)
         return w
     return deco
@@ -157,8 +161,13 @@ def take_challenge(cid, uid, purpose):          # single use, bound to the user 
     r = q1("SELECT * FROM challenges WHERE id=? AND user_id=? AND purpose=? AND used=0 AND expires>?", cid or "", uid, purpose, time.time())
     return r if r and run("UPDATE challenges SET used=1 WHERE id=? AND used=0", cid).rowcount == 1 else None
 
-def rp(): return os.environ.get("RP_ID") or os.environ.get("RENDER_EXTERNAL_HOSTNAME") or request.host.split(":")[0]
-def origin(): return os.environ.get("ORIGIN") or (f"https://{rp()}" if ON_RENDER else f"{request.scheme}://{request.host}")
+def rp():
+    """Passkey domain. Uses RP_ID / Render's hostname only if it matches the site being visited; otherwise the visited host."""
+    cfg = (os.environ.get("RP_ID") or os.environ.get("RENDER_EXTERNAL_HOSTNAME") or "").strip().lower()
+    cfg = cfg.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    h = request.host.split(":")[0].lower()
+    return cfg if cfg and (h == cfg or h.endswith("." + cfg)) else h
+def origin(): return f"{'https' if ON_RENDER else request.scheme}://{request.host}"
 def new_code(): return "".join(secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ23456789") for _ in range(8))
 def _fernet(): return Fernet(base64.urlsafe_b64encode(hashlib.sha256(app.secret_key.encode()).digest()))
 def enc_code(code): return _fernet().encrypt(code.encode()).decode()     # pending codes are stored encrypted so faculty can view them
@@ -461,6 +470,25 @@ def new_activation_code(uid):
     code = new_code(); run("UPDATE users SET act_hash=?, act_enc=? WHERE id=?", code_hash(own["roll_no"], code), enc_code(code), uid)
     audit("code_reissued", session["name"], f"student_id={uid}"); flash(f"New activation code for {own['roll_no']}: {code}")
     return redirect(url_for("students", sid=own["subject_id"]))
+
+@app.post("/teacher/subject/<int:sid>/reset-all")
+@login_required("teacher")
+def reset_all(sid):
+    own_subject(sid)
+    if request.form.get("confirm", "").strip() != "RESET":
+        flash("Nothing was changed. Type RESET exactly to confirm."); return redirect(url_for("students", sid=sid))
+    c = db(); ids = [r["student_id"] for r in q("SELECT student_id FROM enrollments WHERE subject_id=?", sid)]
+    for uid in ids:
+        roll = q1("SELECT roll_no FROM users WHERE id=?", uid)["roll_no"]; code = new_code()
+        exe(c, "UPDATE users SET pw=NULL, act_hash=?, act_enc=? WHERE id=?", (code_hash(roll, code), enc_code(code), uid))
+        exe(c, "DELETE FROM credentials WHERE user_id=?", (uid,))
+    wipe = bool(request.form.get("wipe"))
+    if wipe:
+        exe(c, "DELETE FROM attendance WHERE session_id IN (SELECT id FROM sessions WHERE subject_id=?)", (sid,))
+        exe(c, "DELETE FROM sessions WHERE subject_id=?", (sid,))
+    c.commit(); audit("reset_all", session["name"], f"subject={sid} students={len(ids)} wiped_attendance={wipe}")
+    flash(f"{len(ids)} students are now not activated, with new codes shown below." + (" Attendance records were deleted." if wipe else ""))
+    return redirect(url_for("students", sid=sid))
 
 @app.get("/teacher/audit.json")
 @login_required("teacher")

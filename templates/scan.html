@@ -36,8 +36,8 @@ async function submit(p){
       if(!a.cid){show(false,a.msg||'Rejected.');speakResult(a)}
       else{
         st.textContent='Confirm with your fingerprint, face or screen lock…';
-        let c=null;try{c=await navigator.credentials.get({publicKey:requestOpts(a.options)})}catch(e){}
-        if(!c)show(false,'Identity check cancelled. Scan again.');
+        let c=null,err=null;try{c=await navigator.credentials.get({publicKey:requestOpts(a.options)})}catch(e){err=e}
+        if(!c)show(false,'Identity check cancelled or unavailable'+(err?' ('+err.name+')':'')+'. Scan again.');
         else{const b=await api('/api/scan/finish',{cid:a.cid,credential:cred2json(c)});ok=b.ok;show(ok,b.msg);speakResult(b);if(b.status===401)setTimeout(()=>location='/login',1500)}
       }
     }else{const j=await api('/api/scan',{payload:p});ok=j.ok;show(ok,j.msg);speakResult(j);if(j.status===401)setTimeout(()=>location='/login',1500)}

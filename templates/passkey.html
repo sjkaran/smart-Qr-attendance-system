@@ -3,6 +3,16 @@
 {% else %}<div class="card"><p>A passkey links your account to <b>this phone</b>. Each scan will ask for your fingerprint, face or screen lock, so nobody can scan as you from another phone.</p>
 <p class="mut">Set it up on the phone you will use in class, and only once. Only faculty can reset it.</p><button id="go">Set up passkey</button><p id="msg" role="status"></p></div>
 <script src="{{ url_for('static', filename='pk.js') }}"></script>
-<script>go.onclick=async()=>{msg.textContent='Waiting for fingerprint, face or screen lock…';const a=await api('/api/passkey/register/options');if(!a.cid){msg.textContent=a.msg;return}
-let c;try{c=await navigator.credentials.create({publicKey:creationOpts(a.options)})}catch(e){msg.textContent='Cancelled, or this device does not support passkeys.';return}
-const b=await api('/api/passkey/register/verify',{cid:a.cid,credential:cred2json(c)});msg.textContent=b.msg;if(b.ok)setTimeout(()=>location='/student',1200)}</script>{% endif %}{% endblock %}
+<script>
+function why(e){const n=e&&e.name||'Error',m={
+ NotAllowedError:'Cancelled or timed out. Make sure this phone has a screen lock (PIN, pattern or fingerprint) and try again.',
+ NotSupportedError:'This phone or browser cannot create passkeys. Use Chrome on Android 9+ with Google Play Services, and a screen lock set.',
+ InvalidStateError:'A passkey for this account already exists on this device. Ask faculty to reset it.',
+ SecurityError:'Security error: the site address does not match the passkey setup. Tell your faculty.'};
+ return (m[n]||'Could not create a passkey.')+' ['+n+(e&&e.message?': '+e.message.slice(0,120):'')+']'}
+go.onclick=async()=>{
+ if(!window.isSecureContext||!window.PublicKeyCredential||!navigator.credentials){msg.textContent='This page cannot use passkeys. Open the site in Chrome using its https:// address (not inside another app).';return}
+ msg.textContent='Waiting for fingerprint, face or screen lock…';const a=await api('/api/passkey/register/options');if(!a.cid){msg.textContent=a.msg;return}
+ let c;try{c=await navigator.credentials.create({publicKey:creationOpts(a.options)})}catch(e){msg.textContent=why(e);return}
+ const b=await api('/api/passkey/register/verify',{cid:a.cid,credential:cred2json(c)});msg.textContent=b.msg;if(b.ok)setTimeout(()=>location='/student',1200)}
+</script>{% endif %}{% endblock %}

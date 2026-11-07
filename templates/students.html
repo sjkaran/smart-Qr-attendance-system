@@ -7,4 +7,7 @@
 {% elif r.n_keys %}<form method="post" action="/teacher/student/{{ r.id }}/reset" onsubmit="return confirm('Remove this student\'s passkey?')"><button class="ghost">Reset passkey</button></form>{% endif %}</td></tr>{% endfor %}</table>
 <p><button id="dl" class="ghost">Download pending codes (CSV)</button> <button class="ghost" onclick="print()">Print</button></p></div>
 <script>dl.onclick=()=>{const rows=[['roll','name','code']];document.querySelectorAll('#st tr').forEach(r=>{const c=r.querySelector('code');if(c)rows.push([r.cells[0].textContent,r.cells[1].textContent,c.textContent])});
-const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(x=>'"'+x.replace(/"/g,'""')+'"').join(',')).join('\n')],{type:'text/csv'}));a.download='pending_codes.csv';a.click()}</script>{% endblock %}
+const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(x=>'"'+x.replace(/"/g,'""')+'"').join(',')).join('\n')],{type:'text/csv'}));a.download='pending_codes.csv';a.click()}</script><div class="card" style="border-color:var(--bad)"><h2>Start over</h2>
+<p class="mut">Makes every student in this subject <b>not activated</b> again with a fresh code, and removes their passkeys and logins.</p>
+<form method="post" action="/teacher/subject/{{ s.id }}/reset-all"><label style="display:block;margin-bottom:10px"><input type="checkbox" name="wipe" value="1" style="width:auto;margin:0 8px 0 0">Also delete all attendance records and sessions for this subject</label>
+<label>Type RESET to confirm<input name="confirm" autocomplete="off"></label><button class="danger">Reset students</button></form></div>{% endblock %}
